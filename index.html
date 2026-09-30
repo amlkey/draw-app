@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Рисуем вместе</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #111; font-family: sans-serif; }
+  #canvas { display: block; width: 100vw; height: 100vh; touch-action: none; background: #fff; }
+  #bar {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 10px; z-index: 10;
+  }
+  #bar button {
+    background: #222; color: #fff; border: 1px solid #444;
+    padding: 12px 18px; border-radius: 10px; font-size: 14px;
+    cursor: pointer;
+  }
+  #bar button:active { background: #444; }
+  #status {
+    position: fixed; top: 10px; right: 10px;
+    background: #222; color: #9f9; padding: 6px 12px;
+    border-radius: 6px; font-size: 12px; z-index: 10;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="status">● соединяюсь...</div>
+<div id="bar">
+  <button onclick="clearAll()">Очистить</button>
+  <button onclick="savePng()">Скачать</button>
+</div>
+
+<script>
+const SUPABASE_URL = 'https://yjxgjkwdbufkdypuhzi.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlqeGdqa3dkYmJ1ZmtkeXB1aHppIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA3ODUzMjUsImV4cCI6MjEwNjM2MTMyNX0.QOwRyE6okLvQcTOnFYAKkAHKqolHcgHmHUksNNYydFc';
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+
+let drawing = false;
+let lastX = 0, lastY = 0;
+let currentColor = '#000000';
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  ctx.scale(dpr, dpr);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 3;
+}
+window.addEventListener('resize', resize);
+
+function drawLine(x0, y0, x1, y1, color) {
+  ctx.strokeStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.stroke();
+}
+
+function getPos(e) {
+  const r = canvas.getBoundingClientRect();
+  if (e.touches && e.touches[0]) {
+    return { x: e.touches[0].clientX - r.left, y: e.touches[0].clientY - r.top };
+  }
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+function startDraw(e) {
+  e.preventDefault();
+  drawing = true;
+  const p = getPos(e);
+  lastX = p.x; lastY = p.y;
+}
+function moveDraw(e) {
+  if (!drawing) return;
+  e.preventDefault();
+  const p = getPos(e);
+  drawLine(lastX, lastY, p.x, p.y, currentColor);
+  sendLine(lastX, lastY, p.x, p.y, currentColor);
+  lastX = p.x; lastY = p.y;
+}
+function endDraw(e) {
+  drawing = false;
+}
+
+canvas.addEventListener('mousedown', startDraw);
+canvas.addEventListener('mousemove', moveDraw);
+canvas.addEventListener('mouseup', endDraw);
+canvas.addEventListener('mouseleave', endDraw);
+canvas.addEventListener('touchstart', startDraw, { passive: false });
+canvas.addEventListener('touchmove', moveDraw, { passive: false });
+canvas.addEventListener('touchend', endDraw);
+
+// ===== Supabase =====
+let sb = null;
+let channel = null;
+
+function sendLine(x0, y0, x1, y1, color) {
+  if (!sb) return;
+  sb.from('drawings').insert({ x0, y0, x1, y1, color }).then(() => {});
+}
+
+function clearAll() {
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+  if (sb) sb.from('drawings').delete().neq('id', 0).then(() => {});
+}
+
+function savePng() {
+  const a = document.createElement('a');
+  a.download = 'drawing.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+}
+
+async function init() {
+  resize();
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+
+  sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  channel = sb.channel('room1')
+    .on('postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'drawings' },
+      (payload) => {
+        const d = payload.new;
+        drawLine(d.x0, d.y0, d.x1, d.y1, d.color);
+      })
+    .on('postgres_changes',
+      { event: 'DELETE', schema: 'public', table: 'drawings' },
+      () => {
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+      })
+    .subscribe((s) => {
+      if (s === 'SUBSCRIBED') {
+        statusEl.textContent = '● онлайн';
+        statusEl.style.color = '#9f9';
+      } else {
+        statusEl.textContent = '● ' + s;
+      }
+    });
+}
+
+init();
+</script>
+</body>
+</html>
